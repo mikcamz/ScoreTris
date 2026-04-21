@@ -1,0 +1,509 @@
+"""
+Core logic for Tetris:
+- movement, SRS rotation, lock, line clear
+- heuristic evaluation + move review
+- look-ahead DFS and Beam Search
+- ghost suggestion (best move)
+- leaderboard and pattern persistence
+"""
+
+from __future__ import annotations
+
+import heapq
+import json
+import os
+import time
+
+from structs import Grid, Piece, SevenBag
+
+# ============================================================
+# SRS Wall Kick data
+# (rotation_from, rotation_to): list offsets (dc, dr)
+# ============================================================
+WALL_KICKS = {
+    (0, 1): [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
+    (1, 0): [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
+    (1, 2): [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
+    (2, 1): [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
+    (2, 3): [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+    (3, 2): [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
+    (3, 0): [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
+    (0, 3): [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+}
+
+WALL_KICKS_I = {
+    (0, 1): [(0, 0), (-2, 0), (1, 0), (-2, 1), (1, -2)],
+    (1, 0): [(0, 0), (2, 0), (-1, 0), (2, -1), (-1, 2)],
+    (1, 2): [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
+    (2, 1): [(0, 0), (1, 0), (-2, 0), (1, 2), (-2, -1)],
+    (2, 3): [(0, 0), (2, 0), (-1, 0), (2, -1), (-1, 2)],
+    (3, 2): [(0, 0), (-2, 0), (1, 0), (-2, 1), (1, -2)],
+    (3, 0): [(0, 0), (1, 0), (-2, 0), (1, 2), (-2, -1)],
+    (0, 3): [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
+}
+
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+LEADERBOARD_FILE = os.path.join(THIS_DIR, "leaderboard.json")
+PATTERNS_FILE = os.path.join(THIS_DIR, "patterns.json")
+
+
+def _load_json(path, default_value):
+    if not os.path.exists(path):
+        return default_value
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return default_value
+
+
+def _save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def _to_base36(n):
+    digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    n = int(n)
+    if n == 0:
+        return "0"
+    sign = "" if n >= 0 else "-"
+    n = abs(n)
+    out = []
+    while n:
+        n, rem = divmod(n, 36)
+        out.append(digits[rem])
+    return sign + "".join(reversed(out))
+
+
+class Game:
+    def __init__(self):
+        self.grid = Grid()
+        self.bag = SevenBag()
+        self.piece = None
+        self.hold_name = None
+        self.hold_used = False
+
+        self.score = 0
+        self.lines = 0
+        self.level = 1
+        self.game_over = False
+        self._score_saved = False
+
+        # Heuristic tuning: score = -w1*height - w2*holes - w3*bumpiness + w4*line_clear
+        self.weight_names = ["height", "holes", "bumpiness", "line_clear"]
+        self.weights = [0.45, 0.95, 0.30, 1.15]
+        self.weight_selected = 0
+
+        # Search config
+        self.search_mode = "beam"  # beam | dfs
+        self.lookahead_depth = 2
+        self.beam_width = 24
+        self.enable_ai_hint = True
+
+        # Analysis state
+        self.best_move = None
+        self.best_eval_current = None
+        self.suggestion_piece = None
+        self.last_move_review = "-"
+        self.last_search_nodes = 0
+
+        # Encoded run trace used in leaderboard pattern code.
+        self.move_trace = []
+
+        # Persistence
+        self.leaderboard = _load_json(LEADERBOARD_FILE, [])
+        self.patterns = _load_json(PATTERNS_FILE, [])
+
+        self._spawn()
+
+    # ---------- spawn ----------
+    def _spawn(self):
+        name = self.bag.next()
+        self.piece = Piece(name, col_offset=3, row_offset=0)
+        self.hold_used = False
+        if not self._valid(self.piece):
+            self.game_over = True
+            self._save_score_once()
+            return
+        self.refresh_ai_suggestion()
+
+    def _valid_on_grid(self, grid, piece):
+        for r, c in piece.cells():
+            if not grid.inside(r, c):
+                return False
+            if not grid.empty(r, c):
+                return False
+        return True
+
+    def _valid(self, piece):
+        return self._valid_on_grid(self.grid, piece)
+
+    # ---------- movement ----------
+    def move(self, dr, dc):
+        test = self.piece.copy()
+        test.row += dr
+        test.col += dc
+        if self._valid(test):
+            self.piece.row = test.row
+            self.piece.col = test.col
+            self._update_live_ghost()
+            return True
+        return False
+
+    def rotate(self, direction=1):
+        test = self.piece.copy()
+        old_rot = test.rotation
+        test.rotation = (test.rotation + direction) % 4
+        kicks = WALL_KICKS_I if test.name == "I" else WALL_KICKS
+        key = (old_rot, test.rotation)
+        for dc, dr in kicks.get(key, [(0, 0)]):
+            test2 = self.piece.copy()
+            test2.rotation = test.rotation
+            test2.col += dc
+            test2.row -= dr
+            if self._valid(test2):
+                self.piece.rotation = test2.rotation
+                self.piece.col = test2.col
+                self.piece.row = test2.row
+                self._update_live_ghost()
+                return True
+        return False
+
+    # ---------- drops ----------
+    def hard_drop(self):
+        while self.move(1, 0):
+            self.score += 2
+        self._lock()
+
+    def soft_drop(self):
+        if self.move(1, 0):
+            self.score += 1
+            return True
+        return False
+
+    def ghost(self):
+        g = self.piece.copy()
+        while True:
+            g.row += 1
+            if not self._valid(g):
+                g.row -= 1
+                break
+        return g
+
+    def _update_live_ghost(self):
+        if self.enable_ai_hint:
+            self.refresh_ai_suggestion()
+
+    # ---------- lock / clear / scoring ----------
+    def _lock(self):
+        if self.piece is None:
+            return
+
+        pre_grid = self.grid.clone()
+        placed_piece = self.piece.copy()
+
+        for r, c in self.piece.cells():
+            self.grid.place(r, c, self.piece.name)
+
+        cleared = self.grid.clear_lines()
+        self._add_score(cleared)
+        self.lines += cleared
+        self.level = self.lines // 10 + 1
+        self._record_move_token(placed_piece, cleared)
+
+        actual_eval = self.evaluate_grid(self.grid, cleared)
+        self._review_last_move(actual_eval)
+        self._maybe_store_pattern(pre_grid, cleared)
+
+        self._spawn()
+
+    def _add_score(self, cleared):
+        points = {0: 0, 1: 100, 2: 300, 3: 500, 4: 800}
+        self.score += points.get(cleared, 0) * self.level
+
+    def _review_last_move(self, actual_eval):
+        if self.best_eval_current is None:
+            self.last_move_review = "No baseline"
+            return
+        delta = self.best_eval_current - actual_eval
+        if delta <= 0.5:
+            self.last_move_review = "Optimal"
+        elif delta <= 3.0:
+            self.last_move_review = "Good"
+        elif delta <= 8.0:
+            self.last_move_review = "Risky"
+        else:
+            self.last_move_review = "Blunder"
+
+    def _record_move_token(self, piece, cleared):
+        # token format: <piece><rot><col36><clr>, e.g. T1B0
+        # col is shifted by +8 to avoid sign in compact encoding.
+        col_code = _to_base36(piece.col + 8)
+        token = f"{piece.name}{piece.rotation}{col_code}{cleared}"
+        self.move_trace.append(token)
+
+    def _encoded_run_pattern(self):
+        if not self.move_trace:
+            return "-"
+        return ".".join(self.move_trace)
+
+    def _pattern_code(self):
+        if not self.move_trace:
+            return "-"
+        core = "".join(self.move_trace)
+        value = sum((i + 1) * ord(ch) for i, ch in enumerate(core))
+        return f"P{_to_base36(value)}-{len(self.move_trace)}"
+
+    # ---------- hold ----------
+    def hold(self):
+        if self.hold_used:
+            return
+        self.hold_used = True
+        current_name = self.piece.name
+        if self.hold_name is None:
+            self.hold_name = current_name
+            self._spawn()
+        else:
+            self.hold_name, name = current_name, self.hold_name
+            self.piece = Piece(name, col_offset=3, row_offset=0)
+            if not self._valid(self.piece):
+                self.game_over = True
+                self._save_score_once()
+                return
+            self.refresh_ai_suggestion()
+
+    # ---------- gravity ----------
+    def tick(self):
+        if not self.move(1, 0):
+            self._lock()
+
+    def drop_interval(self):
+        return max(50, int(1000 * (0.8 - (self.level - 1) * 0.007) ** (self.level - 1)))
+
+    def preview(self, n=5):
+        return self.bag.peek(n)
+
+    # ---------- heuristic ----------
+    def evaluate_grid(self, grid, cleared_hint=0):
+        heights = grid.height_profile()
+        agg_height = sum(heights)
+        holes = grid.holes()
+        bumpiness = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
+        line_reward = max(cleared_hint, 0)
+
+        w1, w2, w3, w4 = self.weights
+        return -w1 * agg_height - w2 * holes - w3 * bumpiness + w4 * line_reward
+
+    # ---------- placement generation ----------
+    def _rotation_candidates(self, name):
+        if name == "O":
+            return [0]
+        if name in ("I", "S", "Z"):
+            return [0, 1]
+        return [0, 1, 2, 3]
+
+    def _simulate_placement(self, grid, piece_name, rotation, col):
+        p = Piece(piece_name, col_offset=col, row_offset=0)
+        p.rotation = rotation
+
+        if not self._valid_on_grid(grid, p):
+            return None
+
+        while True:
+            p.row += 1
+            if not self._valid_on_grid(grid, p):
+                p.row -= 1
+                break
+
+        g2 = grid.clone()
+        for r, c in p.cells():
+            g2.place(r, c, piece_name)
+        cleared = g2.clear_lines()
+        score = self.evaluate_grid(g2, cleared)
+        return {
+            "grid": g2,
+            "piece": piece_name,
+            "rotation": rotation,
+            "col": p.col,
+            "row": p.row,
+            "cleared": cleared,
+            "score": score,
+        }
+
+    def _enumerate_moves(self, grid, piece_name):
+        moves = []
+        for rot in self._rotation_candidates(piece_name):
+            for col in range(-2, grid.cols + 2):
+                placement = self._simulate_placement(grid, piece_name, rot, col)
+                if placement is not None:
+                    moves.append(placement)
+        return moves
+
+    # ---------- DFS / Beam ----------
+    def _search_dfs(self, pieces):
+        best = {"score": float("-inf"), "path": []}
+        self.last_search_nodes = 0
+
+        def rec(index, grid, path):
+            self.last_search_nodes += 1
+            if index >= len(pieces):
+                score = self.evaluate_grid(grid)
+                if score > best["score"]:
+                    best["score"] = score
+                    best["path"] = path[:]
+                return
+
+            for move in self._enumerate_moves(grid, pieces[index]):
+                rec(index + 1, move["grid"], path + [move])
+
+        rec(0, self.grid.clone(), [])
+        return best
+
+    def _search_beam(self, pieces, beam_width):
+        self.last_search_nodes = 0
+        states = [{"grid": self.grid.clone(), "path": [], "score": self.evaluate_grid(self.grid)}]
+        counter = 0
+
+        for piece_name in pieces:
+            heap = []
+            for state in states:
+                moves = self._enumerate_moves(state["grid"], piece_name)
+                for move in moves:
+                    self.last_search_nodes += 1
+                    score = self.evaluate_grid(move["grid"], move["cleared"])
+                    next_state = {
+                        "grid": move["grid"],
+                        "path": state["path"] + [move],
+                        "score": score,
+                    }
+                    counter += 1
+                    heapq.heappush(heap, (score, counter, next_state))
+                    if len(heap) > beam_width:
+                        heapq.heappop(heap)
+
+            if not heap:
+                break
+
+            states = [item[2] for item in sorted(heap, key=lambda x: x[0], reverse=True)]
+
+        if not states:
+            return {"score": float("-inf"), "path": []}
+
+        best_state = max(states, key=lambda s: s["score"])
+        return {"score": best_state["score"], "path": best_state["path"]}
+
+    def refresh_ai_suggestion(self):
+        if self.game_over or self.piece is None:
+            self.best_move = None
+            self.suggestion_piece = None
+            self.best_eval_current = None
+            return
+
+        lookahead = [self.piece.name] + self.preview(max(0, self.lookahead_depth - 1))
+
+        if self.search_mode == "dfs":
+            result = self._search_dfs(lookahead)
+        else:
+            result = self._search_beam(lookahead, self.beam_width)
+
+        self.best_eval_current = result["score"]
+        self.best_move = result["path"][0] if result["path"] else None
+
+        if self.enable_ai_hint and self.best_move is not None:
+            p = Piece(self.piece.name, col_offset=self.best_move["col"], row_offset=self.best_move["row"])
+            p.rotation = self.best_move["rotation"]
+            self.suggestion_piece = p
+        else:
+            self.suggestion_piece = None
+
+    # ---------- interactive tuning ----------
+    def select_weight(self, step):
+        n = len(self.weights)
+        self.weight_selected = (self.weight_selected + step) % n
+
+    def adjust_selected_weight(self, delta):
+        idx = self.weight_selected
+        self.weights[idx] = max(-5.0, min(5.0, self.weights[idx] + delta))
+        self.refresh_ai_suggestion()
+
+    def toggle_search_mode(self):
+        self.search_mode = "dfs" if self.search_mode == "beam" else "beam"
+        self.refresh_ai_suggestion()
+
+    def adjust_beam_width(self, delta):
+        self.beam_width = max(4, min(128, self.beam_width + delta))
+        if self.search_mode == "beam":
+            self.refresh_ai_suggestion()
+
+    def adjust_lookahead_depth(self, delta):
+        self.lookahead_depth = max(1, min(4, self.lookahead_depth + delta))
+        self.refresh_ai_suggestion()
+
+    def toggle_ai_hint(self):
+        self.enable_ai_hint = not self.enable_ai_hint
+        self.refresh_ai_suggestion()
+
+    # ---------- persistence ----------
+    def _save_score_once(self):
+        if self._score_saved or self.score <= 0:
+            return
+        self._score_saved = True
+        encoded_route = self._encoded_run_pattern()
+        self.leaderboard.append(
+            {
+                "score": self.score,
+                "lines": self.lines,
+                "level": self.level,
+                "ts": int(time.time()),
+                "pattern_code": self._pattern_code(),
+                "pattern_route": encoded_route,
+            }
+        )
+        self.leaderboard.sort(key=lambda x: (x.get("score", 0), x.get("lines", 0)), reverse=True)
+        self.leaderboard = self.leaderboard[:20]
+        _save_json(LEADERBOARD_FILE, self.leaderboard)
+
+    def _maybe_store_pattern(self, pre_grid, cleared):
+        if cleared < 3 and self.last_move_review not in ("Optimal", "Blunder"):
+            return
+
+        snapshot_rows = []
+        for row in self.grid.cells[-8:]:
+            snapshot_rows.append("".join("." if cell is None else "#" for cell in row))
+
+        self.patterns.append(
+            {
+                "piece": self.piece.name,
+                "cleared": cleared,
+                "review": self.last_move_review,
+                "search_mode": self.search_mode,
+                "weights": [round(w, 3) for w in self.weights],
+                "score": self.score,
+                "snapshot": snapshot_rows,
+                "ts": int(time.time()),
+            }
+        )
+        self.patterns = self.patterns[-80:]
+        _save_json(PATTERNS_FILE, self.patterns)
+
+    # ---------- restart ----------
+    def restart(self):
+        self._save_score_once()
+        self.grid.reset()
+        self.bag.reset()
+        self.piece = None
+        self.hold_name = None
+        self.hold_used = False
+        self.score = 0
+        self.lines = 0
+        self.level = 1
+        self.game_over = False
+        self._score_saved = False
+        self.best_move = None
+        self.best_eval_current = None
+        self.suggestion_piece = None
+        self.last_move_review = "-"
+        self.last_search_nodes = 0
+        self.move_trace = []
+        self._spawn()
