@@ -1,10 +1,11 @@
-"""
-Core logic for Tetris:
-- movement, SRS rotation, lock, line clear
-- heuristic evaluation + move review
-- look-ahead DFS and Beam Search
-- ghost suggestion (best move)
-- leaderboard and pattern persistence
+"""Logic chinh cho Tetris.
+
+File nay gom:
+- Di chuyen, xoay SRS, lock piece, clear line, tinh diem
+- Heuristic de cham board va review nuoc di
+- Tim nuoc theo DFS hoac Beam Search
+- Goi y nuoc di (AI ghost)
+- Luu leaderboard va mau pattern vao JSON
 """
 
 from __future__ import annotations
@@ -48,21 +49,27 @@ PATTERNS_FILE = os.path.join(THIS_DIR, "patterns.json")
 
 
 def _load_json(path, default_value):
+    """Doc file JSON an toan.
+
+    Neu file khong ton tai hoac hong JSON thi tra ve default_value.
+    """
     if not os.path.exists(path):
         return default_value
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, "r", encoding="utf-8") as fp:
+            return json.load(fp)
     except (json.JSONDecodeError, OSError):
         return default_value
 
 
 def _save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    """Luu data ra file JSON voi indent de de nhin."""
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(data, fp, indent=2)
 
 
 def _to_base36(n):
+    """Chuyen so nguyen sang chuoi base36 gon hon de encode."""
     digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     n = int(n)
     if n == 0:
@@ -78,6 +85,7 @@ def _to_base36(n):
 
 class Game:
     def __init__(self):
+        """Khoi tao 1 van game moi, nap du lieu leaderboard/pattern."""
         self.grid = Grid()
         self.bag = SevenBag()
         self.piece = None
@@ -119,6 +127,7 @@ class Game:
 
     # ---------- spawn ----------
     def _spawn(self):
+        """Lay piece moi tu bag va spawn len dau board."""
         name = self.bag.next()
         self.piece = Piece(name, col_offset=3, row_offset=0)
         self.hold_used = False
@@ -129,6 +138,7 @@ class Game:
         self.refresh_ai_suggestion()
 
     def _valid_on_grid(self, grid, piece):
+        """Check piece co hop le tren grid da cho hay khong."""
         for r, c in piece.cells():
             if not grid.inside(r, c):
                 return False
@@ -137,10 +147,12 @@ class Game:
         return True
 
     def _valid(self, piece):
+        """Shortcut check hop le tren board hien tai."""
         return self._valid_on_grid(self.grid, piece)
 
     # ---------- movement ----------
     def move(self, dr, dc):
+        """Di chuyen piece theo do lech hang/cot neu hop le."""
         test = self.piece.copy()
         test.row += dr
         test.col += dc
@@ -152,6 +164,10 @@ class Game:
         return False
 
     def rotate(self, direction=1):
+        """Xoay piece theo SRS wall kick.
+
+        direction = 1: xoay phai, -1: xoay trai.
+        """
         test = self.piece.copy()
         old_rot = test.rotation
         test.rotation = (test.rotation + direction) % 4
@@ -172,17 +188,20 @@ class Game:
 
     # ---------- drops ----------
     def hard_drop(self):
+        """Tha nhanh xuong day, cong diem theo tung o roi, roi lock."""
         while self.move(1, 0):
             self.score += 2
         self._lock()
 
     def soft_drop(self):
+        """Tha mem 1 o, neu duoc thi cong diem nho."""
         if self.move(1, 0):
             self.score += 1
             return True
         return False
 
     def ghost(self):
+        """Tra ve vi tri bong (ghost) cua piece neu tha thang."""
         g = self.piece.copy()
         while True:
             g.row += 1
@@ -192,11 +211,13 @@ class Game:
         return g
 
     def _update_live_ghost(self):
+        """Cap nhat goi y AI neu dang bat hint."""
         if self.enable_ai_hint:
             self.refresh_ai_suggestion()
 
     # ---------- lock / clear / scoring ----------
     def _lock(self):
+        """Khoa piece vao board, clear line, tinh diem, spawn piece moi."""
         if self.piece is None:
             return
 
@@ -219,24 +240,27 @@ class Game:
         self._spawn()
 
     def _add_score(self, cleared):
+        """Cong diem dua vao so dong clear va level hien tai."""
         points = {0: 0, 1: 100, 2: 300, 3: 500, 4: 800}
         self.score += points.get(cleared, 0) * self.level
 
     def _review_last_move(self, actual_eval):
+        """Danh gia nuoc vua danh so voi best eval tim duoc truoc do."""
         if self.best_eval_current is None:
             self.last_move_review = "No baseline"
             return
-        delta = self.best_eval_current - actual_eval
-        if delta <= 0.5:
+        gap = self.best_eval_current - actual_eval
+        if gap <= 0.5:
             self.last_move_review = "Optimal"
-        elif delta <= 3.0:
+        elif gap <= 3.0:
             self.last_move_review = "Good"
-        elif delta <= 8.0:
+        elif gap <= 8.0:
             self.last_move_review = "Risky"
         else:
             self.last_move_review = "Blunder"
 
     def _record_move_token(self, piece, cleared):
+        """Ghi token ngan gon cho nuoc vua danh de tao pattern code."""
         # token format: <piece><rot><col36><clr>, e.g. T1B0
         # col is shifted by +8 to avoid sign in compact encoding.
         col_code = _to_base36(piece.col + 8)
@@ -244,11 +268,13 @@ class Game:
         self.move_trace.append(token)
 
     def _encoded_run_pattern(self):
+        """Tra ve trace dang chuoi, moi token cach nhau boi dau cham."""
         if not self.move_trace:
             return "-"
         return ".".join(self.move_trace)
 
     def _pattern_code(self):
+        """Tao pattern code gon de show tren leaderboard."""
         if not self.move_trace:
             return "-"
         core = "".join(self.move_trace)
@@ -257,6 +283,7 @@ class Game:
 
     # ---------- hold ----------
     def hold(self):
+        """Doi piece vao hold (moi turn chi duoc 1 lan)."""
         if self.hold_used:
             return
         self.hold_used = True
@@ -275,28 +302,37 @@ class Game:
 
     # ---------- gravity ----------
     def tick(self):
+        """Nhip roi theo gravity; khong roi duoc thi lock."""
         if not self.move(1, 0):
             self._lock()
 
     def drop_interval(self):
+        """Tinh khoang thoi gian roi tu dong theo level (ms)."""
         return max(50, int(1000 * (0.8 - (self.level - 1) * 0.007) ** (self.level - 1)))
 
     def preview(self, n=5):
+        """Xem truoc n piece tiep theo trong queue."""
         return self.bag.peek(n)
 
     # ---------- heuristic ----------
     def evaluate_grid(self, grid, cleared_hint=0):
+        """Cham diem board bang weighted sum.
+
+        Cong thuc: -height -holes -bumpiness +line_clear_reward
+        (he so tuy chinh boi self.weights).
+        """
         heights = grid.height_profile()
-        agg_height = sum(heights)
+        h_sum = sum(heights)
         holes = grid.holes()
-        bumpiness = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
-        line_reward = max(cleared_hint, 0)
+        bump = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
+        line_bonus = max(cleared_hint, 0)
 
         w1, w2, w3, w4 = self.weights
-        return -w1 * agg_height - w2 * holes - w3 * bumpiness + w4 * line_reward
+        return -w1 * h_sum - w2 * holes - w3 * bump + w4 * line_bonus
 
     # ---------- placement generation ----------
     def _rotation_candidates(self, name):
+        """Lay tap rotation can thu theo tung loai piece."""
         if name == "O":
             return [0]
         if name in ("I", "S", "Z"):
@@ -304,6 +340,11 @@ class Game:
         return [0, 1, 2, 3]
 
     def _simulate_placement(self, grid, piece_name, rotation, col):
+        """Mo phong dat 1 piece vao cot col voi rotation cho truoc.
+
+        Tra ve thong tin move (grid moi + score) neu hop le,
+        nguoc lai tra ve None.
+        """
         p = Piece(piece_name, col_offset=col, row_offset=0)
         p.rotation = rotation
 
@@ -332,35 +373,38 @@ class Game:
         }
 
     def _enumerate_moves(self, grid, piece_name):
-        moves = []
+        """Sinh tat ca nuoc dat hop le cho 1 piece tren grid."""
+        all_moves = []
         for rot in self._rotation_candidates(piece_name):
             for col in range(-2, grid.cols + 2):
                 placement = self._simulate_placement(grid, piece_name, rot, col)
                 if placement is not None:
-                    moves.append(placement)
-        return moves
+                    all_moves.append(placement)
+        return all_moves
 
     # ---------- DFS / Beam ----------
     def _search_dfs(self, pieces):
-        best = {"score": float("-inf"), "path": []}
+        """Tim duong di tot nhat bang DFS look-ahead day du."""
+        best_state = {"score": float("-inf"), "path": []}
         self.last_search_nodes = 0
 
         def rec(index, grid, path):
             self.last_search_nodes += 1
             if index >= len(pieces):
                 score = self.evaluate_grid(grid)
-                if score > best["score"]:
-                    best["score"] = score
-                    best["path"] = path[:]
+                if score > best_state["score"]:
+                    best_state["score"] = score
+                    best_state["path"] = path[:]
                 return
 
             for move in self._enumerate_moves(grid, pieces[index]):
                 rec(index + 1, move["grid"], path + [move])
 
         rec(0, self.grid.clone(), [])
-        return best
+        return best_state
 
     def _search_beam(self, pieces, beam_width):
+        """Tim duong di bang Beam Search de nhanh hon DFS."""
         self.last_search_nodes = 0
         states = [{"grid": self.grid.clone(), "path": [], "score": self.evaluate_grid(self.grid)}]
         counter = 0
@@ -394,18 +438,19 @@ class Game:
         return {"score": best_state["score"], "path": best_state["path"]}
 
     def refresh_ai_suggestion(self):
+        """Chay search va cap nhat nuoc goi y hien tai."""
         if self.game_over or self.piece is None:
             self.best_move = None
             self.suggestion_piece = None
             self.best_eval_current = None
             return
 
-        lookahead = [self.piece.name] + self.preview(max(0, self.lookahead_depth - 1))
+        peek_names = [self.piece.name] + self.preview(max(0, self.lookahead_depth - 1))
 
         if self.search_mode == "dfs":
-            result = self._search_dfs(lookahead)
+            result = self._search_dfs(peek_names)
         else:
-            result = self._search_beam(lookahead, self.beam_width)
+            result = self._search_beam(peek_names, self.beam_width)
 
         self.best_eval_current = result["score"]
         self.best_move = result["path"][0] if result["path"] else None
@@ -419,33 +464,40 @@ class Game:
 
     # ---------- interactive tuning ----------
     def select_weight(self, step):
+        """Chon trong so dang active de tinh chinh bang phim."""
         n = len(self.weights)
         self.weight_selected = (self.weight_selected + step) % n
 
     def adjust_selected_weight(self, delta):
+        """Tang/giam trong so dang chon trong khoang [-5, 5]."""
         idx = self.weight_selected
         self.weights[idx] = max(-5.0, min(5.0, self.weights[idx] + delta))
         self.refresh_ai_suggestion()
 
     def toggle_search_mode(self):
+        """Doi qua lai giua DFS va Beam mode."""
         self.search_mode = "dfs" if self.search_mode == "beam" else "beam"
         self.refresh_ai_suggestion()
 
     def adjust_beam_width(self, delta):
+        """Tinh chinh do rong beam trong khoang [4, 128]."""
         self.beam_width = max(4, min(128, self.beam_width + delta))
         if self.search_mode == "beam":
             self.refresh_ai_suggestion()
 
     def adjust_lookahead_depth(self, delta):
+        """Tinh chinh do sau look-ahead trong khoang [1, 4]."""
         self.lookahead_depth = max(1, min(4, self.lookahead_depth + delta))
         self.refresh_ai_suggestion()
 
     def toggle_ai_hint(self):
+        """Bat/tat phan bong goi y tu AI."""
         self.enable_ai_hint = not self.enable_ai_hint
         self.refresh_ai_suggestion()
 
     # ---------- persistence ----------
     def _save_score_once(self):
+        """Luu ket qua tran choi 1 lan khi game over/restart."""
         if self._score_saved or self.score <= 0:
             return
         self._score_saved = True
@@ -465,6 +517,10 @@ class Game:
         _save_json(LEADERBOARD_FILE, self.leaderboard)
 
     def _maybe_store_pattern(self, pre_grid, cleared):
+        """Luu 1 mau board vao patterns trong mot vai truong hop noi bat.
+
+        Hien tai uu tien luu khi clear >= 3 hoac review qua tot/qua te.
+        """
         if cleared < 3 and self.last_move_review not in ("Optimal", "Blunder"):
             return
 
@@ -489,6 +545,7 @@ class Game:
 
     # ---------- restart ----------
     def restart(self):
+        """Reset game state de choi tran moi (giu leaderboard/pattern)."""
         self._save_score_once()
         self.grid.reset()
         self.bag.reset()

@@ -71,6 +71,7 @@ COLORS = {
 # ============================================================
 class Grid:
     def __init__(self, cols=10, rows=20):
+        """Tao board kich thuoc cols x rows, ban dau toan o trong."""
         self.cols = cols
         self.rows = rows
         # Mảng 2 chiều: self.cells[row][col]
@@ -160,6 +161,7 @@ class Grid:
         return holes
 
     def line_count(self):
+        """Dem so dong dang day kin (de debug/thong ke)."""
         return sum(1 for row in self.cells if all(cell is not None for cell in row))
 
     def to_bit_rows(self):
@@ -179,6 +181,7 @@ class Grid:
 # ============================================================
 class Piece:
     def __init__(self, name, col_offset=3, row_offset=0):
+        """Khoi tao 1 piece dang roi voi vi tri spawn mac dinh."""
         self.name = name
         self.rotation = 0          # 0-3
         self.row = row_offset
@@ -210,10 +213,12 @@ class ArrayQueue:
     """Hàng đợi chuẩn dùng mảng động với head pointer."""
 
     def __init__(self):
+        """Khoi tao queue bang list + head pointer."""
         self._data = []
         self._head = 0
 
     def __len__(self):
+        """Tra ve so phan tu hien tai trong queue."""
         return len(self._data) - self._head
 
     def push(self, value):
@@ -260,6 +265,7 @@ class SevenBag:
     """
 
     def __init__(self):
+        """Khoi tao randomizer va nap san 2 bag dau tien."""
         self.queue = ArrayQueue()
         self._fill()
         self._fill()
