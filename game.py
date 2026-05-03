@@ -14,7 +14,7 @@ import json
 import os
 import time
 
-from structs import Grid, Piece, SevenBag
+from structs import Grid, Piece, SevenBag, SHAPES
 
 # ============================================================
 # SRS Wall Kick data
@@ -210,9 +210,8 @@ class Game:
         return g
 
     def _update_live_ghost(self):
-        """Cap nhat goi y AI neu dang bat hint."""
-        if self.enable_ai_hint:
-            self.refresh_ai_suggestion()
+        """Khong lam gi – AI chi chay khi spawn piece moi."""
+        pass
 
     # ---------- lock / clear / scoring ----------
     def _lock(self):
@@ -383,10 +382,19 @@ class Game:
         }
 
     def _enumerate_moves(self, grid, piece_name):
-        """Sinh tat ca nuoc dat hop le cho 1 piece tren grid."""
+        """Sinh tat ca nuoc dat hop le cho 1 piece tren grid.
+
+        Chi thu cac cot ma piece thuc su co the nam trong board
+        (tinh theo bounding box cua rotation).
+        """
         all_moves = []
         for rot in self._rotation_candidates(piece_name):
-            for col in range(-2, grid.cols + 2):
+            shape = SHAPES[piece_name][rot]
+            min_dc = min(dc for _, dc in shape)
+            max_dc = max(dc for _, dc in shape)
+            col_lo = -min_dc
+            col_hi = grid.cols - 1 - max_dc
+            for col in range(col_lo, col_hi + 1):
                 placement = self._simulate_placement(grid, piece_name, rot, col)
                 if placement is not None:
                     all_moves.append(placement)
