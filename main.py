@@ -28,6 +28,21 @@ WIN_W = BOARD_W + SIDE_W + 20
 WIN_H = BOARD_H + 20
 
 # ============================================================
+# Key Bindings
+# ============================================================
+KEY_BINDS = {
+    "LEFT": pygame.K_LEFT,
+    "RIGHT": pygame.K_RIGHT,
+    "SOFT_DROP": pygame.K_DOWN,
+    "HARD_DROP": pygame.K_SPACE,
+    "ROT_RIGHT": pygame.K_UP,
+    "ROT_LEFT": pygame.K_z,
+    "FLIP_180": pygame.K_x,
+    "HOLD": pygame.K_c
+}
+BINDING_ACTION = None # To track which action is currently being rebound
+
+# ============================================================
 # Theme Settings
 # ============================================================
 THEMES = {
@@ -209,6 +224,7 @@ ARR = 20    # ms moi lan lap
 
 def main():
     """Entry point: khoi tao pygame, imgui, xu ly input, cap nhat va render game."""
+    global BINDING_ACTION, current_theme
     pygame.init()
     pygame.display.set_mode((WIN_W, WIN_H), DOUBLEBUF | OPENGL)
     screen = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
@@ -240,7 +256,6 @@ def main():
 
     # App state
     app_state = "MENU" # MENU, PLAYING, REVIEW
-    global current_theme
 
     running = True
     while running:
@@ -252,29 +267,41 @@ def main():
 
             impl.process_event(event)
 
+            if app_state == "SETTINGS" and BINDING_ACTION is not None:
+                if event.type == pygame.KEYDOWN:
+                    # Ignore Escape (use it to cancel binding)
+                    if event.key == pygame.K_ESCAPE:
+                        BINDING_ACTION = None
+                    else:
+                        KEY_BINDS[BINDING_ACTION] = event.key
+                        BINDING_ACTION = None
+                continue
+
             # Xu ly Game Input neu dang PLAYING va ImGui khong chiem keyboard
             if app_state == "PLAYING" and not imgui.get_io().want_capture_keyboard:
                 if event.type == pygame.KEYDOWN and not game.game_over:
-                    if event.key == pygame.K_LEFT:
+                    if event.key == KEY_BINDS["LEFT"]:
                         game.move(0, -1)
                         lr_dir = -1
                         lr_timer = 0
                         lr_ready = False
-                    elif event.key == pygame.K_RIGHT:
+                    elif event.key == KEY_BINDS["RIGHT"]:
                         game.move(0, 1)
                         lr_dir = 1
                         lr_timer = 0
                         lr_ready = False
-                    elif event.key == pygame.K_DOWN:
+                    elif event.key == KEY_BINDS["SOFT_DROP"]:
                         soft_drop_on = True
-                    elif event.key in (pygame.K_UP, pygame.K_x):
+                    elif event.key == KEY_BINDS["ROT_RIGHT"]:
                         game.rotate(1)
-                    elif event.key == pygame.K_z:
+                    elif event.key == KEY_BINDS["ROT_LEFT"]:
                         game.rotate(-1)
-                    elif event.key == pygame.K_SPACE:
+                    elif event.key == KEY_BINDS["FLIP_180"]:
+                        game.rotate(2)
+                    elif event.key == KEY_BINDS["HARD_DROP"]:
                         game.hard_drop()
                         grav_timer = 0
-                    elif event.key in (pygame.K_c, pygame.K_LSHIFT):
+                    elif event.key == KEY_BINDS["HOLD"]:
                         game.hold()
                     elif event.key == pygame.K_TAB:
                         game.toggle_search_mode()
@@ -300,11 +327,11 @@ def main():
                         app_state = "MENU"
 
                 if event.type == pygame.KEYUP:
-                    if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                    if event.key in (KEY_BINDS["LEFT"], KEY_BINDS["RIGHT"]):
                         lr_dir = 0
                         lr_timer = 0
                         lr_ready = False
-                    if event.key == pygame.K_DOWN:
+                    if event.key == KEY_BINDS["SOFT_DROP"]:
                         soft_drop_on = False
 
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
@@ -358,14 +385,16 @@ def main():
         imgui.new_frame()
 
         if app_state == "MENU":
-            imgui.set_next_window_size(300, 250)
-            imgui.set_next_window_position((WIN_W // 2) - 150, (WIN_H // 2) - 125)
+            imgui.set_next_window_size(300, 300)
+            imgui.set_next_window_position((WIN_W // 2) - 150, (WIN_H // 2) - 150)
             imgui.begin("Main Menu", flags=imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_COLLAPSE | imgui.WINDOW_NO_MOVE)
             if imgui.button("Start Game", width=280, height=40):
                 app_state = "PLAYING"
                 game.restart()
             if imgui.button("Past Play Review", width=280, height=40):
                 app_state = "REVIEW"
+            if imgui.button("Settings", width=280, height=40):
+                app_state = "SETTINGS"
             if imgui.button(f"Theme: {current_theme}", width=280, height=40):
                 current_theme = "LIGHT" if current_theme == "DARK" else "DARK"
             if imgui.button("Exit", width=280, height=40):
@@ -402,6 +431,30 @@ def main():
                 grav_timer = 0
             if imgui.button("Main Menu", width=180, height=30):
                 app_state = "MENU"
+            imgui.end()
+
+        elif app_state == "SETTINGS":
+            imgui.set_next_window_size(400, 350)
+            imgui.set_next_window_position((WIN_W // 2) - 200, (WIN_H // 2) - 175)
+            imgui.begin("Settings - Controls", flags=imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_COLLAPSE | imgui.WINDOW_NO_MOVE)
+            
+            imgui.text("Click a button, then press a key to rebind.")
+            imgui.separator()
+            
+            for action in KEY_BINDS.keys():
+                key_name = pygame.key.name(KEY_BINDS[action]).upper()
+                label = f"[{key_name}]" if BINDING_ACTION != action else "[PRESS ANY KEY]"
+                
+                imgui.text(action.ljust(15))
+                imgui.same_line(150)
+                if imgui.button(f"{label}##{action}", width=150):
+                    BINDING_ACTION = action
+            
+            imgui.separator()
+            if imgui.button("Back to Menu", width=150):
+                BINDING_ACTION = None
+                app_state = "MENU"
+            
             imgui.end()
 
         # The hien 1 floating window cho huong dan khi dang choi

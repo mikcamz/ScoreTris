@@ -21,25 +21,25 @@ from structs import Grid, Piece, SevenBag, SHAPES
 # (rotation_from, rotation_to): list offsets (dc, dr)
 # ============================================================
 WALL_KICKS = {
-    (0, 1): [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
-    (1, 0): [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
-    (1, 2): [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
-    (2, 1): [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
-    (2, 3): [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
-    (3, 2): [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
-    (3, 0): [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
-    (0, 3): [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+    (0, 1): [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
+    (1, 0): [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+    (1, 2): [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+    (2, 1): [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
+    (2, 3): [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
+    (3, 2): [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
+    (3, 0): [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
+    (0, 3): [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
 }
 
 WALL_KICKS_I = {
-    (0, 1): [(0, 0), (-2, 0), (1, 0), (-2, 1), (1, -2)],
-    (1, 0): [(0, 0), (2, 0), (-1, 0), (2, -1), (-1, 2)],
-    (1, 2): [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
-    (2, 1): [(0, 0), (1, 0), (-2, 0), (1, 2), (-2, -1)],
-    (2, 3): [(0, 0), (2, 0), (-1, 0), (2, -1), (-1, 2)],
-    (3, 2): [(0, 0), (-2, 0), (1, 0), (-2, 1), (1, -2)],
-    (3, 0): [(0, 0), (1, 0), (-2, 0), (1, 2), (-2, -1)],
-    (0, 3): [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
+    (0, 1): [(0, 0), (-2, 0), (1, 0), (-2, -1), (1, 2)],
+    (1, 0): [(0, 0), (2, 0), (-1, 0), (2, 1), (-1, -2)],
+    (1, 2): [(0, 0), (-1, 0), (2, 0), (-1, 2), (2, -1)],
+    (2, 1): [(0, 0), (1, 0), (-2, 0), (1, -2), (-2, 1)],
+    (2, 3): [(0, 0), (2, 0), (-1, 0), (2, 1), (-1, -2)],
+    (3, 2): [(0, 0), (-2, 0), (1, 0), (-2, -1), (1, 2)],
+    (3, 0): [(0, 0), (1, 0), (-2, 0), (1, -2), (-2, 1)],
+    (0, 3): [(0, 0), (-1, 0), (2, 0), (-1, 2), (2, -1)],
 }
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -165,8 +165,20 @@ class Game:
     def rotate(self, direction=1):
         """Xoay piece theo SRS wall kick.
 
-        direction = 1: xoay phai, -1: xoay trai.
+        direction = 1: xoay phai, -1: xoay trai, 2: xoay 180.
         """
+        if direction == 2:
+            # Thu xoay 180: ap dung wall kick cua 180 hoac thu xoay phai 2 lan
+            test = self.piece.copy()
+            test.rotation = (test.rotation + 2) % 4
+            # Standard SRS khong co wall kick rieng cho 180, nhung thu kick co ban nhat
+            # hoac khong kick (chi (0,0)). Cho gian don ta se chi thu kick (0,0).
+            if self._valid(test):
+                self.piece.rotation = test.rotation
+                self._update_live_ghost()
+                return True
+            return False
+
         test = self.piece.copy()
         old_rot = test.rotation
         test.rotation = (test.rotation + direction) % 4
@@ -312,8 +324,18 @@ class Game:
             self._lock()
 
     def drop_interval(self):
-        """Tinh khoang thoi gian roi tu dong theo level (ms)."""
-        return max(50, int(1000 * (0.8 - (self.level - 1) * 0.007) ** (self.level - 1)))
+        """Tinh khoang thoi gian roi tu dong theo level (ms).
+        Giong Classic Tetris: toc do tang nhanh qua tung level.
+        """
+        # NES Tetris frames per drop (60 fps) approximate curve
+        frames_per_drop = [
+            48, 43, 38, 33, 28, 23, 18, 13, 8, 6,
+            5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2,
+            2, 2, 2, 2, 2, 2, 2, 1
+        ]
+        lvl_idx = max(0, min(self.level - 1, len(frames_per_drop) - 1))
+        frames = frames_per_drop[lvl_idx]
+        return (frames / 60.0) * 1000.0
 
     def preview(self, n=5):
         """Xem truoc n piece tiep theo trong queue."""
