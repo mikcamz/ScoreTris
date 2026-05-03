@@ -35,10 +35,10 @@ KEY_BINDS = {
     "RIGHT": pygame.K_RIGHT,
     "SOFT_DROP": pygame.K_DOWN,
     "HARD_DROP": pygame.K_SPACE,
-    "ROT_RIGHT": pygame.K_UP,
+    "ROT_RIGHT": pygame.K_x,
     "ROT_LEFT": pygame.K_z,
-    "FLIP_180": pygame.K_x,
-    "HOLD": pygame.K_c
+    "FLIP_180": pygame.K_a,
+    "HOLD": pygame.K_LSHIFT
 }
 BINDING_ACTION = None # To track which action is currently being rebound
 
