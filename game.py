@@ -10,7 +10,6 @@ File nay gom:
 
 from __future__ import annotations
 
-import heapq
 import json
 import os
 import time
@@ -277,8 +276,15 @@ class Game:
         """Tao pattern code gon de show tren leaderboard."""
         if not self.move_trace:
             return "-"
-        core = "".join(self.move_trace)
-        value = sum((i + 1) * ord(ch) for i, ch in enumerate(core))
+        core = ""
+        for token in self.move_trace:
+            core += token
+
+        value = 0
+        i = 0
+        for ch in core:
+            value += (i + 1) * ord(ch)
+            i += 1
         return f"P{_to_base36(value)}-{len(self.move_trace)}"
 
     # ---------- hold ----------
@@ -324,7 +330,11 @@ class Game:
         heights = grid.height_profile()
         h_sum = sum(heights)
         holes = grid.holes()
-        bump = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
+        bump = 0
+        i = 0
+        while i < len(heights) - 1:
+            bump += abs(heights[i] - heights[i + 1])
+            i += 1
         line_bonus = max(cleared_hint, 0)
 
         w1, w2, w3, w4 = self.weights
@@ -404,37 +414,43 @@ class Game:
         return best_state
 
     def _search_beam(self, pieces, beam_width):
-        """Tim duong di bang Beam Search de nhanh hon DFS."""
+        """Tim duong di bang Beam Search (giu top N moi tang)."""
         self.last_search_nodes = 0
         states = [{"grid": self.grid.clone(), "path": [], "score": self.evaluate_grid(self.grid)}]
-        counter = 0
 
         for piece_name in pieces:
-            heap = []
+            next_states = []
+
             for state in states:
                 moves = self._enumerate_moves(state["grid"], piece_name)
                 for move in moves:
                     self.last_search_nodes += 1
                     score = self.evaluate_grid(move["grid"], move["cleared"])
-                    next_state = {
+                    cand = {
                         "grid": move["grid"],
                         "path": state["path"] + [move],
                         "score": score,
                     }
-                    counter += 1
-                    heapq.heappush(heap, (score, counter, next_state))
-                    if len(heap) > beam_width:
-                        heapq.heappop(heap)
+                    next_states.append(cand)
 
-            if not heap:
+            if not next_states:
                 break
 
-            states = [item[2] for item in sorted(heap, key=lambda x: x[0], reverse=True)]
+            next_states.sort(key=lambda item: item["score"], reverse=True)
+
+            states = []
+            i = 0
+            while i < len(next_states) and i < beam_width:
+                states.append(next_states[i])
+                i += 1
 
         if not states:
             return {"score": float("-inf"), "path": []}
 
-        best_state = max(states, key=lambda s: s["score"])
+        best_state = states[0]
+        for st in states:
+            if st["score"] > best_state["score"]:
+                best_state = st
         return {"score": best_state["score"], "path": best_state["path"]}
 
     def refresh_ai_suggestion(self):
@@ -526,7 +542,17 @@ class Game:
 
         snapshot_rows = []
         for row in self.grid.cells[-8:]:
-            snapshot_rows.append("".join("." if cell is None else "#" for cell in row))
+            row_txt = ""
+            for cell in row:
+                if cell is None:
+                    row_txt += "."
+                else:
+                    row_txt += "#"
+            snapshot_rows.append(row_txt)
+
+        w_out = []
+        for w in self.weights:
+            w_out.append(round(w, 3))
 
         self.patterns.append(
             {
@@ -534,13 +560,15 @@ class Game:
                 "cleared": cleared,
                 "review": self.last_move_review,
                 "search_mode": self.search_mode,
-                "weights": [round(w, 3) for w in self.weights],
+                "weights": w_out,
                 "score": self.score,
                 "snapshot": snapshot_rows,
                 "ts": int(time.time()),
             }
         )
-        self.patterns = self.patterns[-80:]
+
+        if len(self.patterns) > 80:
+            self.patterns = self.patterns[len(self.patterns) - 80:]
         _save_json(PATTERNS_FILE, self.patterns)
 
     # ---------- restart ----------

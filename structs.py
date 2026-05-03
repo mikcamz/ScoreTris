@@ -76,7 +76,12 @@ class Grid:
         self.rows = rows
         # Mảng 2 chiều: self.cells[row][col]
         # None = ô trống, 'I'/'O'/... = ô có gạch
-        self.cells = [[None] * cols for _ in range(rows)]
+        self.cells = []
+        for _ in range(rows):
+            row = []
+            for _ in range(cols):
+                row.append(None)
+            self.cells.append(row)
 
     def inside(self, r, c):
         """
@@ -106,16 +111,39 @@ class Grid:
         filter hàng chưa đầy, thêm hàng trống ở đầu
         Output: số hàng đã xóa
         """
-        new_cells = [row for row in self.cells if any(cell is None for cell in row)]
-        cleared = self.rows - len(new_cells)
+        new_cells = []
+        cleared = 0
+
+        for r in range(self.rows):
+            row = self.cells[r]
+            has_empty = False
+            for c in range(self.cols):
+                if row[c] is None:
+                    has_empty = True
+                    break
+
+            if has_empty:
+                new_cells.append(row)
+            else:
+                cleared += 1
+
         for _ in range(cleared):
-            new_cells.insert(0, [None] * self.cols)
+            new_row = []
+            for _ in range(self.cols):
+                new_row.append(None)
+            new_cells.insert(0, new_row)
+
         self.cells = new_cells
         return cleared
 
     def reset(self):
         """Reset board về trống."""
-        self.cells = [[None] * self.cols for _ in range(self.rows)]
+        self.cells = []
+        for _ in range(self.rows):
+            row = []
+            for _ in range(self.cols):
+                row.append(None)
+            self.cells.append(row)
 
     # === Hàm hỗ trợ AI ===
 
@@ -125,7 +153,12 @@ class Grid:
         Output: Grid mới với cells là deep copy
         """
         g = Grid(self.cols, self.rows)
-        g.cells = [row[:] for row in self.cells]
+        g.cells = []
+        for r in range(self.rows):
+            new_row = []
+            for c in range(self.cols):
+                new_row.append(self.cells[r][c])
+            g.cells.append(new_row)
         return g
 
     def height_profile(self):
@@ -162,15 +195,24 @@ class Grid:
 
     def line_count(self):
         """Dem so dong dang day kin (de debug/thong ke)."""
-        return sum(1 for row in self.cells if all(cell is not None for cell in row))
+        count = 0
+        for r in range(self.rows):
+            full = True
+            for c in range(self.cols):
+                if self.cells[r][c] is None:
+                    full = False
+                    break
+            if full:
+                count += 1
+        return count
 
     def to_bit_rows(self):
         """Chuyển mỗi hàng thành bitmask 10-bit (tối ưu cho AI)."""
         bit_rows = []
         for row in self.cells:
             mask = 0
-            for c, cell in enumerate(row):
-                if cell is not None:
+            for c in range(len(row)):
+                if row[c] is not None:
                     mask |= (1 << c)
             bit_rows.append(mask)
         return bit_rows
@@ -194,7 +236,10 @@ class Piece:
         Output: list[(row, col)] tọa độ tuyệt đối 4 ô
         """
         shape = SHAPES[self.name][self.rotation]
-        return [(self.row + dr, self.col + dc) for dr, dc in shape]
+        out = []
+        for dr, dc in shape:
+            out.append((self.row + dr, self.col + dc))
+        return out
 
     def copy(self):
         """
@@ -244,8 +289,13 @@ class ArrayQueue:
 
     def peek_many(self, n):
         """Xem n phần tử tiếp theo mà không lấy ra."""
+        out = []
+        i = self._head
         end = self._head + n
-        return self._data[self._head:end]
+        while i < end and i < len(self._data):
+            out.append(self._data[i])
+            i += 1
+        return out
 
     def clear(self):
         """Xóa hàng đợi."""
