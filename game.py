@@ -100,7 +100,6 @@ class Game:
         # Heuristic tuning: score = -w1*height - w2*holes - w3*bumpiness + w4*line_clear
         self.weight_names = ["height", "holes", "bumpiness", "line_clear"]
         self.weights = [0.45, 0.95, 0.30, 1.15]
-        self.weight_selected = 0
 
         # Review thresholds
         self.OPTIMAL_THRESHOLD = 0.5
@@ -505,18 +504,6 @@ class Game:
             self.suggestion_piece = p
         else:
             self.suggestion_piece = None
-
-    # ---------- interactive tuning ----------
-    def select_weight(self, step):
-        """Chon trong so dang active de tinh chinh bang phim."""
-        n = len(self.weights)
-        self.weight_selected = (self.weight_selected + step) % n
-
-    def adjust_selected_weight(self, delta):
-        """Tang/giam trong so dang chon trong khoang [-5, 5]."""
-        idx = self.weight_selected
-        self.weights[idx] = max(-5.0, min(5.0, self.weights[idx] + delta))
-        self.refresh_ai_suggestion()
 
     def toggle_search_mode(self):
         """Doi qua lai giua DFS va Beam mode."""

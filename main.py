@@ -161,34 +161,24 @@ def draw_sidebar(surf, game, font):
     surf.blit(font.render(f"Best Eval: {best_txt}", True, theme["text"]), (ai_x, OY + 104))
     surf.blit(font.render(f"Review: {game.last_move_review}", True, SOFT_GREEN), (ai_x, OY + 124))
 
-    # --- WEIGHTS ---
-    surf.blit(font.render("WEIGHT TUNING", True, SOFT_BLUE), (ai_x, OY + 160))
-    for i, (name, value) in enumerate(zip(game.weight_names, game.weights)):
-        txt_clr = SOFT_GREEN if i == game.weight_selected else theme["text"]
-        surf.blit(font.render(f"w{i+1} {name[:8]}: {value:+.2f}", True, txt_clr), (ai_x, OY + 185 + i * 20))
-
-    # --- LEADERBOARD ---
-    surf.blit(font.render("LEADERBOARD", True, SOFT_BLUE), (ai_x, OY + 280))
-    top3 = game.leaderboard[:3]
-    for i, row in enumerate(top3):
-        sc = row.get("score", 0)
-        ln = row.get("lines", 0)
-        ts = row.get("ts", 0)
-        code = row.get("pattern_code", "-")
-        day = datetime.datetime.fromtimestamp(ts).strftime("%m-%d") if ts else "--"
-        surf.blit(font.render(f"{i+1}. {sc} ({ln}L) {day}", True, theme["text"]), (ai_x, OY + 304 + i * 32))
-        surf.blit(font.render(f"    {code}", True, SOFT_GREEN), (ai_x, OY + 320 + i * 32))
+    # --- BEST SCORE ---
+    surf.blit(font.render("BEST SCORE", True, SOFT_BLUE), (ai_x, OY + 160))
+    if game.leaderboard:
+        best = game.leaderboard[0]
+        best_sc = best.get("score", 0)
+        best_ln = best.get("lines", 0)
+        surf.blit(font.render(f"{best_sc} ({best_ln}L)", True, theme["text"]), (ai_x, OY + 185))
+    else:
+        surf.blit(font.render("--", True, theme["text"]), (ai_x, OY + 185))
 
     # --- HELP ---
     help_lines = [
         "Tab: toggle DFS/Beam",
         "; / ': depth -/+",
-        "[ ]: select weight",
-        "- / =: tune weight",
         ", / .: beam width",
         "G: toggle AI ghost",
     ]
-    help_y = OY + 380
+    help_y = OY + 225
     for line in help_lines:
         surf.blit(font.render(line, True, theme["text"]), (ai_x, help_y))
         help_y += 18
@@ -305,14 +295,6 @@ def main():
                         game.hold()
                     elif event.key == pygame.K_TAB:
                         game.toggle_search_mode()
-                    elif event.key == pygame.K_LEFTBRACKET:
-                        game.select_weight(-1)
-                    elif event.key == pygame.K_RIGHTBRACKET:
-                        game.select_weight(1)
-                    elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                        game.adjust_selected_weight(-0.05)
-                    elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
-                        game.adjust_selected_weight(0.05)
                     elif event.key == pygame.K_COMMA:
                         game.adjust_beam_width(-2)
                     elif event.key == pygame.K_PERIOD:
