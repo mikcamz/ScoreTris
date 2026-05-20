@@ -221,9 +221,9 @@ class Game:
         """Tra ve vi tri bong (ghost) cua piece neu tha thang."""
         return self.piece.drop_to_bottom(self.grid)
 
-    # def _update_live_ghost(self):
-    #     """Khong lam gi – AI chi chay khi spawn piece moi."""
-    #     pass
+    def _update_live_ghost(self):
+        """Khong lam gi – AI chi chay khi spawn piece moi."""
+        pass
 
     # ---------- lock / clear / scoring ----------
     def _lock(self):
