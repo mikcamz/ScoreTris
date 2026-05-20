@@ -76,12 +76,7 @@ class Grid:
         self.rows = rows
         # Mảng 2 chiều: self.cells[row][col]
         # None = ô trống, 'I'/'O'/... = ô có gạch
-        self.cells = []
-        for _ in range(rows):
-            row = []
-            for _ in range(cols):
-                row.append(None)
-            self.cells.append(row)
+        self.cells = [[None] * cols for _ in range(rows)]
 
     def inside(self, r, c):
         """
@@ -138,12 +133,7 @@ class Grid:
 
     def reset(self):
         """Reset board về trống."""
-        self.cells = []
-        for _ in range(self.rows):
-            row = []
-            for _ in range(self.cols):
-                row.append(None)
-            self.cells.append(row)
+        self.cells = [[None] * self.cols for _ in range(self.rows)]
 
     # === Hàm hỗ trợ AI ===
 
@@ -153,12 +143,7 @@ class Grid:
         Output: Grid mới với cells là deep copy
         """
         g = Grid(self.cols, self.rows)
-        g.cells = []
-        for r in range(self.rows):
-            new_row = []
-            for c in range(self.cols):
-                new_row.append(self.cells[r][c])
-            g.cells.append(new_row)
+        g.cells = [row[:] for row in self.cells]
         return g
 
     def height_profile(self):
@@ -168,12 +153,12 @@ class Grid:
         """
         heights = [0] * self.cols
         for c in range(self.cols):
-            h = 0
+            height = 0
             for r in range(self.rows):
                 if self.cells[r][c] is not None:
-                    h = self.rows - r
+                    height = self.rows - r
                     break
-            heights[c] = h
+            heights[c] = height
         return heights
 
     def holes(self):
@@ -192,31 +177,6 @@ class Grid:
                 elif block_seen:
                     holes += 1
         return holes
-
-    def line_count(self):
-        """Dem so dong dang day kin (de debug/thong ke)."""
-        count = 0
-        for r in range(self.rows):
-            full = True
-            for c in range(self.cols):
-                if self.cells[r][c] is None:
-                    full = False
-                    break
-            if full:
-                count += 1
-        return count
-
-    def to_bit_rows(self):
-        """Chuyển mỗi hàng thành bitmask 10-bit (tối ưu cho AI)."""
-        bit_rows = []
-        for row in self.cells:
-            mask = 0
-            for c in range(len(row)):
-                if row[c] is not None:
-                    mask |= (1 << c)
-            bit_rows.append(mask)
-        return bit_rows
-
 
 # ============================================================
 # Piece – Vien gạch đang rơi
@@ -250,6 +210,24 @@ class Piece:
         p.rotation = self.rotation
         return p
 
+    def drop_to_bottom(self, grid):
+        """
+        Thả piece xuống đáy grid, trả về bản sao piece đã ở vị trí đáy.
+        Dùng chung cho ghost(), hard_drop, simulate_placement.
+        """
+        g = self.copy()
+        while True:
+            g.row += 1
+            valid = True
+            for r, c in g.cells():
+                if not grid.inside(r, c) or not grid.empty(r, c):
+                    valid = False
+                    break
+            if not valid:
+                g.row -= 1
+                break
+        return g
+
 
 # ============================================================
 # ArrayQueue – Hàng đợi tử cài (O(1) amortized pop)
@@ -259,18 +237,18 @@ class ArrayQueue:
 
     def __init__(self):
         """Khoi tao queue bang list + head pointer."""
-        self._data = []
-        self._head = 0
+        self._items = []
+        self._front = 0
 
     def __len__(self):
         """Tra ve so phan tu hien tai trong queue."""
-        return len(self._data) - self._head
+        return len(self._items) - self._front
 
     def push(self, value):
         """
         Thêm phần tử vào cuối hàng đợi.
         """
-        self._data.append(value)
+        self._items.append(value)
 
     def pop(self):
         """
@@ -280,27 +258,27 @@ class ArrayQueue:
         """
         if len(self) == 0:
             raise IndexError("pop from empty queue")
-        value = self._data[self._head]
-        self._head += 1
-        if self._head > 64 and self._head * 2 > len(self._data):
-            self._data = self._data[self._head:]
-            self._head = 0
+        value = self._items[self._front]
+        self._front += 1
+        if self._front > 64 and self._front * 2 > len(self._items):
+            self._items = self._items[self._front:]
+            self._front = 0
         return value
 
     def peek_many(self, n):
         """Xem n phần tử tiếp theo mà không lấy ra."""
         out = []
-        i = self._head
-        end = self._head + n
-        while i < end and i < len(self._data):
-            out.append(self._data[i])
+        i = self._front
+        end = self._front + n
+        while i < end and i < len(self._items):
+            out.append(self._items[i])
             i += 1
         return out
 
     def clear(self):
         """Xóa hàng đợi."""
-        self._data.clear()
-        self._head = 0
+        self._items.clear()
+        self._front = 0
 
 
 # ============================================================

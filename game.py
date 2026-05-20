@@ -102,6 +102,11 @@ class Game:
         self.weights = [0.45, 0.95, 0.30, 1.15]
         self.weight_selected = 0
 
+        # Review thresholds
+        self.OPTIMAL_THRESHOLD = 0.5
+        self.GOOD_THRESHOLD = 3.0
+        self.RISKY_THRESHOLD = 8.0
+
         # Search config
         self.search_mode = "beam"  # beam | dfs
         self.lookahead_depth = 2
@@ -130,13 +135,13 @@ class Game:
         name = self.bag.next()
         self.piece = Piece(name, col_offset=3, row_offset=0)
         self.hold_used = False
-        if not self._valid(self.piece):
+        if not self._is_valid(self.piece):
             self.game_over = True
             self._save_score_once()
             return
         self.refresh_ai_suggestion()
 
-    def _valid_on_grid(self, grid, piece):
+    def _is_valid_placement(self, grid, piece):
         """Check piece co hop le tren grid da cho hay khong."""
         for r, c in piece.cells():
             if not grid.inside(r, c):
@@ -145,9 +150,9 @@ class Game:
                 return False
         return True
 
-    def _valid(self, piece):
+    def _is_valid(self, piece):
         """Shortcut check hop le tren board hien tai."""
-        return self._valid_on_grid(self.grid, piece)
+        return self._is_valid_placement(self.grid, piece)
 
     # ---------- movement ----------
     def move(self, dr, dc):
@@ -155,9 +160,19 @@ class Game:
         test = self.piece.copy()
         test.row += dr
         test.col += dc
-        if self._valid(test):
+        if self._is_valid(test):
             self.piece.row = test.row
             self.piece.col = test.col
+            self._update_live_ghost()
+            return True
+        return False
+
+    def _try_180_rotation(self):
+        """Thu xoay 180° (chi thu offset (0,0) vi SRS khong co bang kick rieng)."""
+        test = self.piece.copy()
+        test.rotation = (test.rotation + 2) % 4
+        if self._is_valid(test):
+            self.piece.rotation = test.rotation
             self._update_live_ghost()
             return True
         return False
@@ -168,16 +183,7 @@ class Game:
         direction = 1: xoay phai, -1: xoay trai, 2: xoay 180.
         """
         if direction == 2:
-            # Thu xoay 180: ap dung wall kick cua 180 hoac thu xoay phai 2 lan
-            test = self.piece.copy()
-            test.rotation = (test.rotation + 2) % 4
-            # Standard SRS khong co wall kick rieng cho 180, nhung thu kick co ban nhat
-            # hoac khong kick (chi (0,0)). Cho gian don ta se chi thu kick (0,0).
-            if self._valid(test):
-                self.piece.rotation = test.rotation
-                self._update_live_ghost()
-                return True
-            return False
+            return self._try_180_rotation()
 
         test = self.piece.copy()
         old_rot = test.rotation
@@ -189,7 +195,7 @@ class Game:
             test2.rotation = test.rotation
             test2.col += dc
             test2.row -= dr
-            if self._valid(test2):
+            if self._is_valid(test2):
                 self.piece.rotation = test2.rotation
                 self.piece.col = test2.col
                 self.piece.row = test2.row
@@ -213,17 +219,11 @@ class Game:
 
     def ghost(self):
         """Tra ve vi tri bong (ghost) cua piece neu tha thang."""
-        g = self.piece.copy()
-        while True:
-            g.row += 1
-            if not self._valid(g):
-                g.row -= 1
-                break
-        return g
+        return self.piece.drop_to_bottom(self.grid)
 
-    def _update_live_ghost(self):
-        """Khong lam gi – AI chi chay khi spawn piece moi."""
-        pass
+    # def _update_live_ghost(self):
+    #     """Khong lam gi – AI chi chay khi spawn piece moi."""
+    #     pass
 
     # ---------- lock / clear / scoring ----------
     def _lock(self):
@@ -260,11 +260,11 @@ class Game:
             self.last_move_review = "No baseline"
             return
         gap = self.best_eval_current - actual_eval
-        if gap <= 0.5:
+        if gap <= self.OPTIMAL_THRESHOLD:
             self.last_move_review = "Optimal"
-        elif gap <= 3.0:
+        elif gap <= self.GOOD_THRESHOLD:
             self.last_move_review = "Good"
-        elif gap <= 8.0:
+        elif gap <= self.RISKY_THRESHOLD:
             self.last_move_review = "Risky"
         else:
             self.last_move_review = "Blunder"
@@ -311,11 +311,11 @@ class Game:
         else:
             self.hold_name, name = current_name, self.hold_name
             self.piece = Piece(name, col_offset=3, row_offset=0)
-            if not self._valid(self.piece):
-                self.game_over = True
-                self._save_score_once()
-                return
-            self.refresh_ai_suggestion()
+        if not self._is_valid(self.piece):
+            self.game_over = True
+            self._save_score_once()
+            return
+        self.refresh_ai_suggestion()
 
     # ---------- gravity ----------
     def tick(self):
@@ -379,14 +379,10 @@ class Game:
         p = Piece(piece_name, col_offset=col, row_offset=0)
         p.rotation = rotation
 
-        if not self._valid_on_grid(grid, p):
+        if not self._is_valid_placement(grid, p):
             return None
 
-        while True:
-            p.row += 1
-            if not self._valid_on_grid(grid, p):
-                p.row -= 1
-                break
+        p = p.drop_to_bottom(grid)
 
         g2 = grid.clone()
         for r, c in p.cells():
@@ -425,23 +421,25 @@ class Game:
     # ---------- DFS / Beam ----------
     def _search_dfs(self, pieces):
         """Tim duong di tot nhat bang DFS look-ahead day du."""
-        best_state = {"score": float("-inf"), "path": []}
+        best_score = float("-inf")
+        best_path = []
         self.last_search_nodes = 0
 
         def rec(index, grid, path):
+            nonlocal best_score, best_path
             self.last_search_nodes += 1
             if index >= len(pieces):
                 score = self.evaluate_grid(grid)
-                if score > best_state["score"]:
-                    best_state["score"] = score
-                    best_state["path"] = path[:]
+                if score > best_score:
+                    best_score = score
+                    best_path = path[:]
                 return
 
             for move in self._enumerate_moves(grid, pieces[index]):
                 rec(index + 1, move["grid"], path + [move])
 
         rec(0, self.grid.clone(), [])
-        return best_state
+        return {"score": best_score, "path": best_path}
 
     def _search_beam(self, pieces, beam_width):
         """Tim duong di bang Beam Search (giu top N moi tang)."""
